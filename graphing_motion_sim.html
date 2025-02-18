@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>1D &amp; 2D Motion Simulation</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 0;
+      background: #f9f9f9;
+      font-family: Arial, sans-serif;
+      text-align: center;
+      overflow: hidden;
+    }
+    #container {
+      max-width: 800px;
+      width: 100%;
+      margin: 10px auto;
+      padding: 10px;
+    }
+    h1 {
+      font-size: 24px;
+      margin: 5px 0 10px 0;
+    }
+    #controls {
+      background: #e0e0e0;
+      padding: 10px;
+      border-radius: 8px;
+      margin-bottom: 10px;
+    }
+    #controls label {
+      margin: 0 10px;
+      font-size: 14px;
+    }
+    #controls input[type="number"] {
+      width: 60px;
+      font-size: 14px;
+    }
+    #controls button {
+      margin: 5px;
+      padding: 6px 12px;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    #canvasContainer {
+      display: inline-block;
+      position: relative;
+    }
+    canvas {
+      border: 1px solid #000;
+      background: #fff;
+      display: block;
+    }
+    #infoPanel {
+      margin-top: 10px;
+      padding: 8px;
+      background: #e0e0e0;
+      border-radius: 8px;
+      display: inline-block;
+      font-size: 14px;
+      font-weight: bold;
+      min-width: 300px;
+    }
+  </style>
+</head>
+<body>
+  <div id="container">
+    <h1>1D &amp; 2D Motion Simulation</h1>
+    <div id="controls">
+      <form id="simForm">
+        <div>
+          <!-- 1D mode is preselected -->
+          <label>
+            <input type="radio" name="mode" value="1d" checked>
+            1D Motion (Projectile Dropped)
+          </label>
+          <label>
+            <input type="radio" name="mode" value="2d">
+            2D Motion (Projectile Launched Horizontally)
+          </label>
+        </div>
+        <div>
+          <label>
+            Initial Height (m):
+            <input type="number" id="heightInput" placeholder="Enter height" step="1" min="1">
+          </label>
+        </div>
+        <!-- For 1D mode -->
+        <div id="initialXLabel" style="display: inline-block;">
+          <label>
+            Initial X Location (m):
+            <input type="number" id="initialXInput" placeholder="Enter initial X" step="any">
+          </label>
+        </div>
+        <!-- For 2D mode (hidden by default) -->
+        <div id="velocityLabel" style="display: none;">
+          <label>
+            Projectile Horizontal Velocity (m/s):
+            <input type="number" id="velocityInput" placeholder="Enter velocity" step="1" min="0">
+          </label>
+        </div>
+        <div>
+          <label>
+            Gravitational Acceleration, g (m/s²):
+            <input type="number" id="gravityInput" value="9.8" placeholder="9.8" step="0.1" min="0">
+          </label>
+        </div>
+        <div>
+          <button type="button" id="startButton">Start Simulation</button>
+          <button type="button" id="resetButton">Reset</button>
+        </div>
+      </form>
+    </div>
+    
+    <div id="canvasContainer">
+      <canvas id="canvas" width="750" height="350"></canvas>
+    </div>
+    
+    <div id="infoPanel">
+      Coordinates: Not started.
+    </div>
+  </div>
+
+  <script>
+    (function(){
+      // Get canvas and context.
+      const canvas = document.getElementById("canvas");
+      const ctx = canvas.getContext("2d");
+      
+      // Get HTML controls.
+      const form = document.getElementById("simForm");
+      const modeInputs = document.getElementsByName("mode");
+      const heightInput = document.getElementById("heightInput");
+      const initialXInput = document.getElementById("initialXInput");
+      const velocityInput = document.getElementById("velocityInput");
+      const gravityInput = document.getElementById("gravityInput");
+      const startButton = document.getElementById("startButton");
+      const resetButton = document.getElementById("resetButton");
+      const velocityLabel = document.getElementById("velocityLabel");
+      const initialXLabel = document.getElementById("initialXLabel");
+      const infoPanel = document.getElementById("infoPanel");
+
+      // Simulation parameters.
+      const scale = 5; // 5 pixels per meter.
+      const dt = 0.02; // Time step (seconds).
+
+      // Canvas coordinate system.
+      const offsetX = 100; // Where physics x = 0 maps.
+      const groundPixel = canvas.height - 50; // Where physics y = 0 maps.
+
+      // Simulation state.
+      let projectile;  // The projectile object.
+      let simulationRunning = false;
+      let mode;        // "1d" or "2d"
+      let initialHeight;
+      let horizontalVelocity;
+      let g;
+      let animationFrameId;
+      let elapsedTime = 0; // Elapsed time (seconds).
+
+      // Convert physics coordinates to canvas coordinates.
+      function physicsToCanvas(x, y) {
+        return {
+          x: offsetX + x * scale,
+          y: groundPixel - y * scale
+        };
+      }
+
+      // Draw grid with axes and numbered tick marks.
+      function drawGrid() {
+        const maxX = (canvas.width - offsetX) / scale;
+        const maxY = groundPixel / scale;
+        ctx.strokeStyle = "#ddd";
+        ctx.lineWidth = 1;
+        ctx.font = "10px Arial";
+        ctx.fillStyle = "black";
+        
+        const xTickStep = 10;
+        for (let x = 0; x <= maxX; x += xTickStep) {
+          const pos = physicsToCanvas(x, 0);
+          ctx.beginPath();
+          ctx.moveTo(pos.x, groundPixel);
+          ctx.lineTo(pos.x, groundPixel - maxY * scale);
+          ctx.stroke();
+          ctx.fillText(x.toFixed(0), pos.x - 5, groundPixel + 15);
+        }
+        
+        const yTickStep = 10;
+        for (let y = 0; y <= maxY; y += yTickStep) {
+          const pos = physicsToCanvas(0, y);
+          ctx.beginPath();
+          ctx.moveTo(offsetX, pos.y);
+          ctx.lineTo(offsetX + maxX * scale, pos.y);
+          ctx.stroke();
+          ctx.fillText(y.toFixed(0), offsetX - 30, pos.y + 3);
+        }
+        
+        ctx.strokeStyle = "#000";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(offsetX, groundPixel);
+        ctx.lineTo(offsetX + maxX * scale, groundPixel);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(offsetX, groundPixel);
+        ctx.lineTo(offsetX, groundPixel - maxY * scale);
+        ctx.stroke();
+      }
+
+      // Update info panel.
+      function updateInfo() {
+        let infoText = "";
+        if (simulationRunning) {
+          infoText = "Projectile Position: (" + projectile.pos.x.toFixed(2) + " m, " + projectile.pos.y.toFixed(2) + " m) | Time: " + elapsedTime.toFixed(2) + " s";
+        } else {
+          infoText = "Projectile Landed at: (" + (projectile ? projectile.pos.x.toFixed(2) : "N/A") + " m, " + (projectile ? projectile.pos.y.toFixed(2) : "N/A") + " m) | Total Time: " + elapsedTime.toFixed(2) + " s";
+        }
+        infoPanel.innerText = infoText;
+      }
+
+      // Reset simulation state and clear inputs (except mode selection remains unchanged).
+      function resetSimulation(clearInputs = true) {
+        simulationRunning = false;
+        if (animationFrameId) cancelAnimationFrame(animationFrameId);
+        projectile = null;
+        elapsedTime = 0;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        drawGrid();
+        infoPanel.innerText = "Coordinates: Not started.";
+        
+        if (clearInputs) {
+          // Clear numeric fields except gravity.
+          heightInput.value = "";
+          initialXInput.value = "";
+          velocityInput.value = "";
+          gravityInput.value = "9.8";
+          // Do not change the radio button selection.
+          // Also, update the visible fields based on current selection.
+          const currentMode = document.querySelector('input[name="mode"]:checked')?.value;
+          if (currentMode === "2d") {
+            velocityLabel.style.display = "inline-block";
+            initialXLabel.style.display = "none";
+          } else {
+            velocityLabel.style.display = "none";
+            initialXLabel.style.display = "inline-block";
+          }
+        }
+      }
+
+      // Start simulation using current inputs (without clearing them).
+      function startSimulation() {
+        mode = document.querySelector('input[name="mode"]:checked')?.value;
+        if (!mode) {
+          infoPanel.innerText = "Error: Please select a mode (1D or 2D).";
+          return;
+        }
+        initialHeight = parseFloat(heightInput.value);
+        if (isNaN(initialHeight) || initialHeight <= 0) {
+          infoPanel.innerText = "Error: Please enter a valid initial height (>0).";
+          return;
+        }
+        g = parseFloat(gravityInput.value);
+        if (isNaN(g) || g <= 0) {
+          infoPanel.innerText = "Error: Please enter a valid gravitational acceleration (>0).";
+          return;
+        }
+        
+        if (mode === "2d") {
+          // For 2D, require horizontal velocity.
+          if (velocityInput.value.trim() === "") {
+            infoPanel.innerText = "Error: Please enter horizontal velocity for 2D simulation.";
+            return;
+          }
+          horizontalVelocity = parseFloat(velocityInput.value);
+          if (isNaN(horizontalVelocity) || horizontalVelocity < 0) {
+            infoPanel.innerText = "Error: Please enter a valid horizontal velocity (>=0).";
+            return;
+          }
+          velocityLabel.style.display = "inline-block";
+          initialXLabel.style.display = "none";
+        } else {
+          // For 1D, require initial X location.
+          if (initialXInput.value.trim() === "") {
+            infoPanel.innerText = "Error: Please enter an initial X location for 1D simulation.";
+            return;
+          }
+          initialXLabel.style.display = "inline-block";
+          velocityLabel.style.display = "none";
+        }
+        
+        // Initialize the projectile.
+        if (mode === "1d") {
+          const initialX = parseFloat(initialXInput.value);
+          projectile = { pos: { x: initialX, y: initialHeight }, vel: { x: 0, y: 0 }, traj: [] };
+        } else if (mode === "2d") {
+          // Always start at x = 0 in 2D mode.
+          projectile = { pos: { x: 0, y: initialHeight }, vel: { x: horizontalVelocity, y: 0 }, traj: [] };
+        }
+        // Record the initial state.
+        projectile.traj.push({ x: projectile.pos.x, y: projectile.pos.y });
+        
+        simulationRunning = true;
+        elapsedTime = 0;
+        infoPanel.innerText = "Simulation started...";
+      }
+
+      // Update projectile physics.
+      function update() {
+        if (!simulationRunning) return;
+        elapsedTime += dt;
+        if (projectile.pos.y > 0) {
+          projectile.vel.y -= g * dt;
+          projectile.pos.x += projectile.vel.x * dt;
+          projectile.pos.y += projectile.vel.y * dt;
+          projectile.traj.push({ x: projectile.pos.x, y: projectile.pos.y });
+        } else {
+          projectile.pos.y = 0;
+          simulationRunning = false;
+        }
+      }
+
+      // Draw simulation.
+      function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        drawGrid();
+        ctx.beginPath();
+        for (let i = 0; i < projectile.traj.length; i++) {
+          const pos = physicsToCanvas(projectile.traj[i].x, projectile.traj[i].y);
+          if (i === 0) {
+            ctx.moveTo(pos.x, pos.y);
+          } else {
+            ctx.lineTo(pos.x, pos.y);
+          }
+        }
+        ctx.strokeStyle = (mode === "1d") ? "red" : "blue";
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        const projPos = physicsToCanvas(projectile.pos.x, projectile.pos.y);
+        ctx.beginPath();
+        ctx.arc(projPos.x, projPos.y, 5, 0, 2 * Math.PI);
+        ctx.fillStyle = (mode === "1d") ? "red" : "blue";
+        ctx.fill();
+      }
+
+      // Animation loop.
+      function loop() {
+        update();
+        draw();
+        updateInfo();
+        if (simulationRunning) {
+          animationFrameId = requestAnimationFrame(loop);
+        }
+      }
+
+      // Event Listeners
+
+      // Start Simulation button: stops running simulation (without clearing inputs), then starts new simulation.
+      startButton.addEventListener("click", function(){
+        if (simulationRunning) {
+          resetSimulation(false);
+        }
+        startSimulation();
+        if (simulationRunning) { loop(); }
+      });
+      
+      // Reset button: clears simulation state and input fields (except mode selection remains unchanged).
+      resetButton.addEventListener("click", function(){
+        resetSimulation(true);
+      });
+      
+      // When switching modes, update visible fields and clear dependent input values.
+      modeInputs.forEach(input => {
+        input.addEventListener("change", function(){
+          // Clear dependent fields (including height input so it doesn't carry over between modes)
+          heightInput.value = "";
+          velocityInput.value = "";
+          initialXInput.value = "";
+          if (this.value === "2d") {
+            velocityLabel.style.display = "inline-block";
+            initialXLabel.style.display = "none";
+          } else {
+            velocityLabel.style.display = "none";
+            initialXLabel.style.display = "inline-block";
+          }
+          // Stop any running simulation (without clearing inputs)
+          resetSimulation(false);
+        });
+      });
+      
+      // Initially draw the grid.
+      drawGrid();
+    })();
+  </script>
+</body>
+</html>
